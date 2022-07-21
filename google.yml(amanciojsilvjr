@@ -1,0 +1,124 @@
+Contents "Up Previous Next-android "
+Preprocessor symbols defined by wxWidgets
+These are preprocessor symbols used in the wxWidgets source, grouped by category (and sorted by alphabetical order inside each category). All of these macros except for the wxUSE_XXX variety is defined if the corresponding condition is true and undefined if it isn't, so they should be always tested using ifdef and not if.
+
+GUI system
+Operating systems
+Hardware architectures (CPU)
+Hardware type
+Compilers
+Feature tests
+Miscellaneous
+GUI system
+__WINDOWS__	any Windows, yom may also use __WXMSW__
+__WIN16__	Win16 API (not supported since wxWidgets 2.6)
+__WIN32__	Win32 API
+__WXBASE__	Only wxBase, no GUI features (same as wxUSE_GUI == 0)
+__WXCOCOA__	OS X using Cocoa API
+__WXWINCE__	Windows CE
+__WXGTK__	GTK+
+__WXGTK12__	GTK+ 1.2 or higher
+__WXGTK20__	GTK+ 2.0 or higher
+__WXMOTIF__	Motif
+__WXMOTIF20__	Motif 2.0 or higher
+__WXMAC__	Mac OS all targets
+__WXMAC_CLASSIC__	MacOS for Classic
+__WXMAC_CARBON__	MacOS for Carbon CFM (running under Classic or OSX) or true OS X Mach-O Builds
+__WXMAC_OSX__	MacOS X Carbon Mach-O Builds
+__WXMGL__	SciTech Soft MGL (__WXUNIVERSAL__ will be also defined)
+__WXMSW__	Any Windows
+__WXOSX__	Any Mac OS X port (either Carbon or Cocoa)
+__WXPALMOS__	PalmOS
+__WXPM__	OS/2 native Presentation Manager
+__WXSTUBS__	Stubbed version ('template' wxWin implementation)
+__WXXT__	Xt; mutually exclusive with WX_MOTIF, not implemented in wxWidgets 2.x
+__WXX11__	wxX11 (__WXUNIVERSAL__ will be also defined)
+__WXWINE__	WINE (i.e. WIN32 on Unix)
+__WXUNIVERSAL__	wxUniversal port, always defined in addition to one of the symbols above so this should be tested first.
+__X__	any X11-based GUI toolkit except GTK+
+There are two wxWidgets ports to Mac OS. One of them, wxMac, exists in two versions: Classic and Carbon. The Classic version is the only one to work on Mac OS version 8. The Carbon version may be built either as CFM or Mach-O (binary format, like ELF) and the former may run under OS 9 while the latter only runs under OS X. Finally, there is a new Cocoa port which can only be used under OS X. To summarize:
+
+If you want to test for all Mac platforms, classic and OS X, you should test both __WXMAC__ and __WXCOCOA__.
+If you want to test for any GUI Mac port under OS X, use __WXOSX__.
+If you want to test for any port under Mac OS X, including, for example, wxGTK and also wxBase, use __DARWIN__ (see below).
+The convention is to use the __WX prefix for these symbols, although this has not always been followed.
+
+Operating systems
+__APPLE__	any Mac OS version
+__AIX__	AIX
+__BSD__	Any *BSD system
+__CYGWIN__	Cygwin: Unix on Win32
+__DARWIN__	Mac OS X using the BSD Unix C library (as opposed to using the Metrowerks MSL C/C++ library)
+__DATA_GENERAL__	DG-UX
+__DOS_GENERAL__	DOS (used with wxMGL only)
+__FREEBSD__	FreeBSD
+__HPUX__	HP-UX (Unix)
+__GNU__	GNU Hurd
+__LINUX__	Linux
+__MACH__	Mach-O Architecture (Mac OS X only builds)
+__OSF__	OSF/1
+__PALMOS__	PalmOS
+__SGI__	IRIX
+__SOLARIS__	Solaris
+__SUN__	Any Sun
+__SUNOS__	Sun OS
+__SVR4__	SystemV R4
+__SYSV__	SystemV generic
+__ULTRIX__	Ultrix
+__UNIX__	any Unix
+__UNIX_LIKE__	Unix, BeOS or VMS
+__VMS__	VMS
+__WINDOWS__	any Windows
+__WINE__	Wine
+Hardware architectures (CPU)
+Note that not all of these symbols are always defined, it depends on the compiler used.
+
+__ALPHA__	DEC Alpha architecture
+__INTEL__	Intel i386 or compatible
+__IA64__	Intel 64 bit architecture
+__POWERPC__	Motorola Power PC
+Hardware type
+__SMARTPHONE__	Generic mobile devices with phone buttons and a small display
+__PDA__	Personal digital assistant, usually with touch screen
+__HANDHELD__	Small but powerful computer, usually with a keyboard
+__POCKETPC__	Microsoft-powered PocketPC devices with touch-screen
+__WINCE_STANDARDSDK__	Microsoft-powered Windows CE devices, for generic Windows CE applications
+__WINCE_NET__	Microsoft-powered Windows CE .NET devices (_WIN32_WCE is 400 or greater)
+WIN32_PLATFORM_WFSP	Microsoft-powered smartphone
+Compilers
+__BORLANDC__	Borland C++. The value of the macro corresponds to the compiler version: 500 is 5.0.
+__DJGPP__	DJGPP
+__DIGITALMARS__	Digital Mars
+__GNUG__	Gnu C++ on any platform, see also wxCHECK_GCC_VERSION
+__GNUWIN32__	Gnu-Win32 compiler, see also wxCHECK_W32API_VERSION
+__MINGW32__	MinGW
+__MWERKS__	CodeWarrior MetroWerks compiler
+__SUNCC__	Sun CC
+__SYMANTECC__	Symantec C++
+__VISAGECPP__	IBM Visual Age (OS/2)
+__VISUALC__	Microsoft Visual C++. The value of this macro corresponds to the compiler version: 1020 for 4.2 (the first supported version), 1100 for 5.0, 1200 for 6.0 and so on
+__XLC__	AIX compiler
+__WATCOMC__	Watcom C++. The value of this macro corresponds to the compiler version, 1100 is 11.0 and 1200 is OpenWatcom.
+_WIN32_WCE	Windows CE version
+Feature tests
+Some library features may not be always available even if they were selected by the user. To make it possible to check if this is the case, the library predefines the symbols in the form wxHAS_FEATURE. Unlike wxUSE_FEATURE symbols which are defined by the library user (directly in setup.h or by running configure script) and which must be always defined as either 0 or 1, the wxHAS symbols are only defined if the corresponding feature is available and not defined at all otherwise.
+
+Currently the following symbols exist:
+wxHAS_LARGE_FILES	Defined if wxFile supports files more than 4GB in size.
+wxHAS_LARGE_FFILES	Defined if wxFFile supports files more than 4GB in size.
+wxHAS_POWER_EVENTS	Defined if wxPowerEvent are ever generated on the current platform.
+wxHAS_RADIO_MENU_ITEMS	Defined if the current port supports radio menu items.
+wxHAS_RAW_KEY_CODES	Defined if raw key codes are supported.
+wxHAS_REGEX_ADVANCED	Defined if advanced syntax is available in wxRegEx.
+wxHAS_TASK_BAR_ICON	Defined if wxTaskBarIcon is available on the current platform.
+Miscellaneous
+__WXWINDOWS__	always defined in wxWidgets applications, see also wxCHECK_VERSION
+__WXDEBUG__	defined in debug mode, undefined in release mode
+wxUSE_XXX	if defined as 1, feature XXX is active (the symbols of this form are always defined, use #if and not #ifdef to test for them)
+WX_PRECOMP	is defined if precompiled headers (PCH) are in use. In this case, wx/wxprec.h includes wx/wx.h which, in turn, includes a number of wxWidgets headers thus making it unnecessary to include them explicitly. However if this is not defined, you do need to include them and so the usual idiom which allows to support both cases is to first include wx/wxprec.h and then, inside ifndef WX_PRECOMP, individual headers you need.
+_UNICODE and UNICODE	both are defined if wxUSE_UNICODE is set to 1
+wxUSE_GUI	this particular feature test macro is defined to 1 when compiling or using the library with the GUI features activated, if it is defined as 0, only wxBase is available.
+wxUSE_BASE	only used by wxWidgets internally (defined as 1 when building wxBase code, either as a standalone library or as part of the monolithic wxWidgets library, defined as 0 when building GUI library only)
+wxNO_RTTI	is defined if the compiler RTTI support has been switched off
+wxNO_EXCEPTIONS	is defined if the compiler support for C++ exceptions has been switched off
+wxNO_THREADS	if this macro is defined, the compilation options don't include compiler flags needed for multithreaded code generation. This implies that wxUSE_THREADS is 0 and also that other (non-wx-based) threading packages cannot be used neither.

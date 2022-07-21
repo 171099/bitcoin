@@ -1,0 +1,3 @@
+* **`Pr-VIPE`**: Learning a view-invariant probabilistic pose embedding space. [[`ECCV'20 paper`](https://arxiv.org/abs/1912.01001)][[`IJCV'21 paper`](https://arxiv.org/abs/2010.13321)][[`website`](https://sites.google.com/corp/view/pr-vipe/home)]
+The installation requires [Python3](https://www.python.org/), [virtualenv](https://virtualenv.pypa.io/), and [pip](https://pip.pypa.io/) pre-installed.
+Please refer to [`requirements.txt`](https://github.com/google-research/google-research/blob/master/poem/requirements.txt) and
