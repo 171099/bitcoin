@@ -1,162 +1,227 @@
-Mac OS X Build Instructions and Notes
-====================================
-This guide will show you how to build bitcoind(headless client) for OSX.
+# macOS Build Guide
 
-Notes
------
+**Updated for MacOS [26](https://www.apple.com/os/macos/)**
 
-* See [readme-qt.md](readme-qt.md) for instructions on building Bitcoin-Qt, the
-graphical user interface.
-* Tested on OS X 10.5 through 10.8 on Intel processors only. PPC is not
-supported because it is big-endian.
-* All of the commands should be executed in a Terminal application. The
-built-in one is located in `/Applications/Utilities`.
+This guide describes how to build bitcoind, command-line utilities, and GUI on macOS.
 
-Preparation
------------
+## Preparation
 
-You need to install XCode with all the options checked so that the compiler
-and everything is available in /usr not just /Developer. XCode should be
-available on your OS X installation media, but if not, you can get the
-current version from https://developer.apple.com/xcode/. If you install
-Xcode 4.3 or later, you'll need to install its command line tools. This can
-be done in `Xcode > Preferences > Downloads > Components` and generally must
-be re-done or updated every time Xcode is updated.
+The commands in this guide should be executed in a Terminal application.
+macOS comes with a built-in Terminal located in:
 
-There's an assumption that you already have `git` installed, as well. If
-not, it's the path of least resistance to install [Github for Mac](https://mac.github.com/)
-(OS X 10.7+) or
-[Git for OS X](https://code.google.com/p/git-osx-installer/). It is also
-available via Homebrew or MacPorts.
+```bash
+/Applications/Utilities/Terminal.app
+```
 
-You will also need to install [Homebrew](http://mxcl.github.io/homebrew/)
-or [MacPorts](https://www.macports.org/) in order to install library
-dependencies. It's largely a religious decision which to choose, but, as of
-December 2012, MacPorts is a little easier because you can just install the
-dependencies immediately - no other work required. If you're unsure, read
-the instructions through first in order to assess what you want to do.
-Homebrew is a little more popular among those newer to OS X.
+### 1. Xcode Command Line Tools
 
-The installation of the actual dependencies is covered in the Instructions
-sections below.
+The Xcode Command Line Tools are a collection of build tools for macOS.
+Version 26.3 (or higher) of these tools must be
+[installed](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools)
+in order to build Bitcoin Core from source.
 
-Instructions: MacPorts
-----------------------
+To install, run the following command from your terminal:
 
-### Install dependencies
+``` bash
+xcode-select --install
+```
 
-Installing the dependencies using MacPorts is very straightforward.
+Upon running the command, you should see a popup appear.
+Click on `Install` to continue the installation process.
 
-    sudo port install boost db48@+no_java openssl miniupnpc
+### 2. Homebrew Package Manager
 
-### Building `bitcoind`
+Homebrew is a package manager for macOS that allows one to install packages from the command line easily.
+While several package managers are available for macOS, this guide will focus on Homebrew as it is the most popular.
+Since the examples in this guide which walk through the installation of a package will use Homebrew, it is recommended that you install it to follow along.
+Otherwise, you can adapt the commands to your package manager of choice.
 
-1. Clone the github tree to get the source code and go into the directory.
+To install the Homebrew package manager, see: https://brew.sh
 
-        git clone git@github.com:bitcoin/bitcoin.git bitcoin
-        cd bitcoin
+Note: If you run into issues while installing Homebrew or pulling packages, refer to [Homebrew's troubleshooting page](https://docs.brew.sh/Troubleshooting).
 
-2.  Build bitcoind:
+### 3. Install Required Dependencies
 
-        cd src
-        make -f makefile.osx
+The first step is to download the required dependencies.
+These dependencies represent the packages required to get a barebones installation up and running.
 
-3.  It is a good idea to build and run the unit tests, too:
+See [dependencies.md](dependencies.md) for a complete overview.
 
-        make -f makefile.osx test
+To install, run the following from your terminal:
 
-Instructions: HomeBrew
-----------------------
+``` bash
+brew install cmake boost capnp
+```
 
-#### Install dependencies using Homebrew
+#### Wallet Dependencies
 
-        brew install boost miniupnpc openssl berkeley-db4
+If you do not need wallet functionality, you can use `-DENABLE_WALLET=OFF` in
+the `cmake -B` step below.
 
-Note: After you have installed the dependencies, you should check that the Brew installed version of OpenSSL is the one available for compilation. You can check this by typing
+SQLite is required, but since macOS ships with a useable `sqlite` package, you don't need to
+install anything.
 
-        openssl version
+#### IPC Dependencies
 
-into Terminal. You should see OpenSSL 1.0.1e 11 Feb 2013.
+If you do not need IPC functionality (see [multiprocess.md](multiprocess.md))
+you can omit `capnp` and use `-DENABLE_IPC=OFF` in the `cmake -B` step below.
 
-If not, you can ensure that the Brew OpenSSL is correctly linked by running
+### 4. Clone Bitcoin repository
 
-        brew link openssl --force
+`git` should already be installed by default on your system.
+Now that all the required dependencies are installed, let's clone the Bitcoin Core repository to a directory.
+All build scripts and commands will run from this directory.
 
-Rerunning "openssl version" should now return the correct version.
+``` bash
+git clone https://github.com/bitcoin/bitcoin.git
+```
 
-### Building `bitcoind`
+### 5. Install Optional Dependencies
 
-1. Clone the github tree to get the source code and go into the directory.
+#### GUI Dependencies
 
-        git clone git@github.com:bitcoin/bitcoin.git bitcoin
-        cd bitcoin
+###### Qt
 
-2.  Modify source in order to pick up the `openssl` library.
+Bitcoin Core includes a GUI built with the cross-platform Qt Framework. To compile the GUI, we need to install
+Qt, libqrencode and pass `-DBUILD_GUI=ON`. Skip if you don't intend to use the GUI.
 
-    Edit `makefile.osx` to account for library location differences. There's a
-    diff in `contrib/homebrew/makefile.osx.patch` that shows what you need to
-    change, or you can just patch by doing
+``` bash
+brew install qt@6
+```
 
-        patch -p1 < contrib/homebrew/makefile.osx.patch
+Note: Building with Qt binaries downloaded from the Qt website is not officially supported.
+See the notes in [#7714](https://github.com/bitcoin/bitcoin/issues/7714).
 
-3.  Build bitcoind:
+###### libqrencode
 
-        cd src
-        make -f makefile.osx
+The GUI will be able to encode addresses in QR codes unless this feature is explicitly disabled. To install libqrencode, run:
 
-4.  It is a good idea to build and run the unit tests, too:
+``` bash
+brew install qrencode
+```
 
-        make -f makefile.osx test
+Otherwise, if you don't need QR encoding support, you can pass `-DWITH_QRENCODE=OFF` to disable this feature.
 
-Creating a release build
-------------------------
+---
 
-A bitcoind binary is not included in the Bitcoin-Qt.app bundle. You can ignore
-this section if you are building `bitcoind` for your own use.
+#### ZMQ Dependencies
 
-If you are building `bitcoind` for others, your build machine should be set up
-as follows for maximum compatibility:
+Bitcoin Core can provide notifications via ZeroMQ. To compile ZMQ support, install the following dependency and pass `-DWITH_ZMQ=ON` when configuring.
+Skip if you do not need ZMQ functionality.
 
-All dependencies should be compiled with these flags:
+``` bash
+brew install zeromq pkgconf
+```
 
-    -mmacosx-version-min=10.5 -arch i386 -isysroot /Developer/SDKs/MacOSX10.5.sdk
+Check out the [further configuration](#further-configuration) section for more information.
 
-For MacPorts, that means editing your macports.conf and setting
-`macosx_deployment_target` and `build_arch`:
+For more information on ZMQ, see: [zmq.md](zmq.md)
 
-    macosx_deployment_target=10.5
-    build_arch=i386
+---
 
-... and then uninstalling and re-installing, or simply rebuilding, all ports.
+#### Test Suite Dependencies
 
-As of December 2012, the `boost` port does not obey `macosx_deployment_target`.
-Download `http://gavinandresen-bitcoin.s3.amazonaws.com/boost_macports_fix.zip`
-for a fix. Some ports also seem to obey either `build_arch` or
-`macosx_deployment_target`, but not both at the same time. For example, building
-on an OS X 10.6 64-bit machine fails. Official release builds of Bitcoin-Qt are
-compiled on an OS X 10.6 32-bit machine to workaround that problem.
+There is an included test suite that is useful for testing code changes when developing.
+To run the test suite (recommended), you will need to have Python 3 installed:
 
-Once dependencies are compiled, creating `Bitcoin-Qt.app` is easy:
+``` bash
+brew install python
+```
 
-    make -f Makefile.osx RELEASE=1
+---
 
-Running
--------
+#### Deploy Dependencies
 
-It's now available at `./bitcoind`, provided that you are still in the `src`
-directory. We have to first create the RPC configuration file, though.
+You can [deploy](#3-deploy-optional) a `.zip` containing the Bitcoin Core application.
+It is required that you have `python` and `zip` installed.
 
-Run `./bitcoind` to get the filename where it should be put, or just try these
-commands:
+## Building Bitcoin Core
 
-    echo -e "rpcuser=bitcoinrpc\nrpcpassword=$(xxd -l 16 -p /dev/urandom)" > "/Users/${USER}/Library/Application Support/Bitcoin/bitcoin.conf"
-    chmod 600 "/Users/${USER}/Library/Application Support/Bitcoin/bitcoin.conf"
+### 1. Configuration
 
-When next you run it, it will start downloading the blockchain, but it won't
-output anything while it's doing this. This process may take several hours.
+There are many ways to configure Bitcoin Core, here are a few common examples:
 
-Other commands:
+##### Wallet and GUI:
 
-    ./bitcoind --help  # for a list of command-line options.
-    ./bitcoind -daemon # to start the bitcoin daemon.
-    ./bitcoind help    # When the daemon is running, to get a list of RPC commands
+This enables the GUI.
+If `sqlite` or `qt` are not installed, this will throw an error.
+
+``` bash
+cmake -B build -DBUILD_GUI=ON
+```
+
+##### No Wallet or GUI
+
+``` bash
+cmake -B build -DENABLE_WALLET=OFF
+```
+
+##### Further Configuration
+
+You may want to dig deeper into the configuration options to achieve your desired behavior.
+Examine the output of the following command for a full list of configuration options:
+
+``` bash
+cmake -B build -LH
+```
+
+### 2. Compile
+
+After configuration, you are ready to compile.
+Run the following in your terminal to compile Bitcoin Core:
+
+``` bash
+cmake --build build     # Append "-j N" here for N parallel jobs.
+ctest --test-dir build  # Append "-j N" for N parallel tests.
+```
+
+### 3. Deploy (optional)
+
+You can also create a `.zip` containing the `.app` bundle by running the following command:
+
+``` bash
+cmake --build build --target deploy
+```
+
+## Running Bitcoin Core
+
+Bitcoin Core should now be available at `./build/bin/bitcoind`.
+If you compiled support for the GUI, it should be available at `./build/bin/bitcoin-qt`.
+
+There is also a multifunction command line interface at `./build/bin/bitcoin`
+supporting subcommands like `bitcoin node`, `bitcoin gui`, `bitcoin rpc`, and
+others that can be listed with `bitcoin help`.
+
+The first time you run `bitcoind` or `bitcoin-qt`, it will start downloading the blockchain.
+This process could take many hours, or even days on slower than average systems.
+
+By default, blockchain and wallet data files will be stored in:
+
+``` bash
+/Users/${USER}/Library/Application Support/Bitcoin/
+```
+
+Before running, you may create an empty configuration file:
+
+```shell
+mkdir -p "/Users/${USER}/Library/Application Support/Bitcoin"
+
+touch "/Users/${USER}/Library/Application Support/Bitcoin/bitcoin.conf"
+
+chmod 600 "/Users/${USER}/Library/Application Support/Bitcoin/bitcoin.conf"
+```
+
+You can monitor the download process by looking at the debug.log file:
+
+```shell
+tail -f $HOME/Library/Application\ Support/Bitcoin/debug.log
+```
+
+## Other commands:
+
+```shell
+./build/bin/bitcoind -daemon      # Starts the bitcoin daemon.
+./build/bin/bitcoin-cli --help    # Outputs a list of command-line options.
+./build/bin/bitcoin-cli help      # Outputs a list of RPC commands when the daemon is running.
+./build/bin/bitcoin-qt -server # Starts the bitcoin-qt server mode, allows bitcoin-cli control
+```

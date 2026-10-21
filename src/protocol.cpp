@@ -1,151 +1,125 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2012 The Bitcoin developers
-// Distributed under the MIT/X11 software license, see the accompanying
+// Copyright (c) 2009-present The Bitcoin Core developers
+// Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "protocol.h"
-#include "util.h"
-#include "netbase.h"
+#include <protocol.h>
 
-#ifndef WIN32
-# include <arpa/inet.h>
-#endif
+#include <common/system.h>
 
-static const char* ppszTypeName[] =
+CMessageHeader::CMessageHeader(const MessageStartChars& pchMessageStartIn, const char* msg_type, unsigned int nMessageSizeIn)
+    : pchMessageStart{pchMessageStartIn}
 {
-    "ERROR",
-    "tx",
-    "block",
-    "filtered block"
-};
+    // Copy the message type name
+    size_t i = 0;
+    for (; i < MESSAGE_TYPE_SIZE && msg_type[i] != 0; ++i) m_msg_type[i] = msg_type[i];
+    assert(msg_type[i] == 0); // Assert that the message type name passed in is not longer than MESSAGE_TYPE_SIZE
 
-CMessageHeader::CMessageHeader()
-{
-    memcpy(pchMessageStart, Params().MessageStart(), MESSAGE_START_SIZE);
-    memset(pchCommand, 0, sizeof(pchCommand));
-    pchCommand[1] = 1;
-    nMessageSize = -1;
-    nChecksum = 0;
-}
-
-CMessageHeader::CMessageHeader(const char* pszCommand, unsigned int nMessageSizeIn)
-{
-    memcpy(pchMessageStart, Params().MessageStart(), MESSAGE_START_SIZE);
-    strncpy(pchCommand, pszCommand, COMMAND_SIZE);
     nMessageSize = nMessageSizeIn;
-    nChecksum = 0;
 }
 
-std::string CMessageHeader::GetCommand() const
+std::string CMessageHeader::GetMessageType() const
 {
-    if (pchCommand[COMMAND_SIZE-1] == 0)
-        return std::string(pchCommand, pchCommand + strlen(pchCommand));
-    else
-        return std::string(pchCommand, pchCommand + COMMAND_SIZE);
+    return std::string(m_msg_type, m_msg_type + strnlen(m_msg_type, MESSAGE_TYPE_SIZE));
 }
 
-bool CMessageHeader::IsValid() const
+bool CMessageHeader::IsMessageTypeValid() const
 {
-    // Check start string
-    if (memcmp(pchMessageStart, Params().MessageStart(), MESSAGE_START_SIZE) != 0)
-        return false;
-
-    // Check the command string for errors
-    for (const char* p1 = pchCommand; p1 < pchCommand + COMMAND_SIZE; p1++)
-    {
-        if (*p1 == 0)
-        {
+    // Check the message type string for errors
+    for (const char* p1 = m_msg_type; p1 < m_msg_type + MESSAGE_TYPE_SIZE; ++p1) {
+        if (*p1 == 0) {
             // Must be all zeros after the first zero
-            for (; p1 < pchCommand + COMMAND_SIZE; p1++)
-                if (*p1 != 0)
+            for (; p1 < m_msg_type + MESSAGE_TYPE_SIZE; ++p1) {
+                if (*p1 != 0) {
                     return false;
-        }
-        else if (*p1 < ' ' || *p1 > 0x7E)
+                }
+            }
+        } else if (*p1 < ' ' || *p1 > 0x7E) {
             return false;
-    }
-
-    // Message size
-    if (nMessageSize > MAX_SIZE)
-    {
-        LogPrintf("CMessageHeader::IsValid() : (%s, %u bytes) nMessageSize > MAX_SIZE\n", GetCommand().c_str(), nMessageSize);
-        return false;
+        }
     }
 
     return true;
 }
 
-
-
-CAddress::CAddress() : CService()
-{
-    Init();
-}
-
-CAddress::CAddress(CService ipIn, uint64 nServicesIn) : CService(ipIn)
-{
-    Init();
-    nServices = nServicesIn;
-}
-
-void CAddress::Init()
-{
-    nServices = NODE_NETWORK;
-    nTime = 100000000;
-    nLastTry = 0;
-}
-
 CInv::CInv()
 {
     type = 0;
-    hash = 0;
+    hash.SetNull();
 }
 
-CInv::CInv(int typeIn, const uint256& hashIn)
-{
-    type = typeIn;
-    hash = hashIn;
-}
-
-CInv::CInv(const std::string& strType, const uint256& hashIn)
-{
-    unsigned int i;
-    for (i = 1; i < ARRAYLEN(ppszTypeName); i++)
-    {
-        if (strType == ppszTypeName[i])
-        {
-            type = i;
-            break;
-        }
-    }
-    if (i == ARRAYLEN(ppszTypeName))
-        throw std::out_of_range(strprintf("CInv::CInv(string, uint256) : unknown type '%s'", strType.c_str()));
-    hash = hashIn;
-}
+CInv::CInv(uint32_t typeIn, const uint256& hashIn) : type(typeIn), hash(hashIn) {}
 
 bool operator<(const CInv& a, const CInv& b)
 {
     return (a.type < b.type || (a.type == b.type && a.hash < b.hash));
 }
 
-bool CInv::IsKnownType() const
+std::string CInv::GetMessageType() const
 {
-    return (type >= 1 && type < (int)ARRAYLEN(ppszTypeName));
-}
-
-const char* CInv::GetCommand() const
-{
-    if (!IsKnownType())
-        throw std::out_of_range(strprintf("CInv::GetCommand() : type=%d unknown type", type));
-    return ppszTypeName[type];
+    std::string cmd;
+    if (type & MSG_WITNESS_FLAG)
+        cmd.append("witness-");
+    int masked = type & MSG_TYPE_MASK;
+    switch (masked)
+    {
+    case MSG_TX:             return cmd.append(NetMsgType::TX);
+    // WTX is not a message type, just an inv type
+    case MSG_WTX:            return cmd.append("wtx");
+    case MSG_BLOCK:          return cmd.append(NetMsgType::BLOCK);
+    case MSG_FILTERED_BLOCK: return cmd.append(NetMsgType::MERKLEBLOCK);
+    case MSG_CMPCT_BLOCK:    return cmd.append(NetMsgType::CMPCTBLOCK);
+    default:
+        throw std::out_of_range(strprintf("CInv::GetMessageType(): type=%d unknown type", type));
+    }
 }
 
 std::string CInv::ToString() const
 {
-    return strprintf("%s %s", GetCommand(), hash.ToString().c_str());
+    try {
+        return strprintf("%s %s", GetMessageType(), hash.ToString());
+    } catch(const std::out_of_range &) {
+        return strprintf("0x%08x %s", type, hash.ToString());
+    }
 }
 
-void CInv::print() const
+/**
+ * Convert a service flag (NODE_*) to a human readable string.
+ * It supports unknown service flags which will be returned as "UNKNOWN[...]".
+ * @param[in] bit the service flag is calculated as (1 << bit)
+ */
+static std::string serviceFlagToStr(size_t bit)
 {
-    LogPrintf("CInv(%s)\n", ToString().c_str());
+    const uint64_t service_flag = 1ULL << bit;
+    switch ((ServiceFlags)service_flag) {
+    case NODE_NONE: abort();  // impossible
+    case NODE_NETWORK:         return "NETWORK";
+    case NODE_BLOOM:           return "BLOOM";
+    case NODE_WITNESS:         return "WITNESS";
+    case NODE_COMPACT_FILTERS: return "COMPACT_FILTERS";
+    case NODE_NETWORK_LIMITED: return "NETWORK_LIMITED";
+    case NODE_P2P_V2:          return "P2P_V2";
+    // Not using default, so we get warned when a case is missing
+    }
+
+    return strprintf("UNKNOWN[2^%u]", bit);
 }
 
+std::vector<std::string> serviceFlagsToStr(uint64_t flags)
+{
+    std::vector<std::string> str_flags;
+
+    for (size_t i = 0; i < sizeof(flags) * 8; ++i) {
+        if (flags & (1ULL << i)) {
+            str_flags.emplace_back(serviceFlagToStr(i));
+        }
+    }
+
+    return str_flags;
+}
+
+GenTxid ToGenTxid(const CInv& inv)
+{
+    assert(inv.IsGenTxMsg());
+    return inv.IsMsgWtx() ? GenTxid{Wtxid::FromUint256(inv.hash)} : GenTxid{Txid::FromUint256(inv.hash)};
+}

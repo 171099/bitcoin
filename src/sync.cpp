@@ -1,128 +1,335 @@
-// Copyright (c) 2011-2012 The Bitcoin developers
-// Distributed under the MIT/X11 software license, see the accompanying
+// Copyright (c) 2011-present The Bitcoin Core developers
+// Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "sync.h"
-#include "util.h"
+#include <sync.h>
 
-#include <boost/foreach.hpp>
+#include <logging/timer.h>
+#include <tinyformat.h>
+#include <util/log.h>
+#include <util/stdmutex.h>
+#include <util/strencodings.h>
+#include <util/threadnames.h>
+
+#include <map>
+#include <mutex>
+#include <set>
+#include <system_error>
+#include <thread>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #ifdef DEBUG_LOCKCONTENTION
-void PrintLockContention(const char* pszName, const char* pszFile, int nLine)
+
+template <typename LockType>
+void ContendedLock(std::string_view name, std::string_view file, int nLine, LockType& lock)
 {
-    LogPrintf("LOCKCONTENTION: %s\n", pszName);
-    LogPrintf("Locker: %s:%d\n", pszFile, nLine);
+    LOG_TIME_MICROS_WITH_CATEGORY(strprintf("lock contention %s, %s:%d", name, file, nLine), BCLog::LOCK);
+    lock.lock();
 }
-#endif /* DEBUG_LOCKCONTENTION */
+template void ContendedLock(std::string_view name, std::string_view file, int nLine, std::unique_lock<std::mutex>& lock);
+template void ContendedLock(std::string_view name, std::string_view file, int nLine, std::unique_lock<std::recursive_mutex>& lock);
+
+#endif
 
 #ifdef DEBUG_LOCKORDER
 //
 // Early deadlock detection.
 // Problem being solved:
-//    Thread 1 locks  A, then B, then C
-//    Thread 2 locks  D, then C, then A
+//    Thread 1 locks A, then B, then C
+//    Thread 2 locks D, then C, then A
 //     --> may result in deadlock between the two threads, depending on when they run.
 // Solution implemented here:
 // Keep track of pairs of locks: (A before B), (A before C), etc.
 // Complain if any thread tries to lock in a different order.
 //
 
-struct CLockLocation
-{
-    CLockLocation(const char* pszName, const char* pszFile, int nLine)
-    {
-        mutexName = pszName;
-        sourceFile = pszFile;
-        sourceLine = nLine;
-    }
+struct CLockLocation {
+    CLockLocation(
+        const char* pszName,
+        const char* pszFile,
+        int nLine,
+        bool fTryIn,
+        std::string&& thread_name)
+        : fTry(fTryIn),
+          mutexName(pszName),
+          sourceFile(pszFile),
+          m_thread_name(std::move(thread_name)),
+          sourceLine(nLine) {}
 
     std::string ToString() const
     {
-        return mutexName+"  "+sourceFile+":"+itostr(sourceLine);
+        return strprintf(
+            "'%s' in %s:%s%s (in thread '%s')",
+            mutexName, sourceFile, sourceLine, (fTry ? " (TRY)" : ""), m_thread_name);
+    }
+
+    std::string Name() const
+    {
+        return mutexName;
     }
 
 private:
+    bool fTry;
     std::string mutexName;
     std::string sourceFile;
+    const std::string m_thread_name;
     int sourceLine;
 };
 
-typedef std::vector< std::pair<void*, CLockLocation> > LockStack;
+using LockStackItem = std::pair<void*, CLockLocation>;
+using LockStack = std::vector<LockStackItem>;
+using LockStacks = std::unordered_map<std::thread::id, LockStack>;
 
-static boost::mutex dd_mutex;
-static std::map<std::pair<void*, void*>, LockStack> lockorders;
-static boost::thread_specific_ptr<LockStack> lockstack;
+using LockPair = std::pair<void*, void*>;
+using LockOrders = std::map<LockPair, LockStack>;
+using InvLockOrders = std::set<LockPair>;
 
+struct LockData {
+    LockStacks m_lock_stacks GUARDED_BY(dd_mutex);
+    LockOrders lockorders GUARDED_BY(dd_mutex);
+    InvLockOrders invlockorders GUARDED_BY(dd_mutex);
+    StdMutex dd_mutex;
+};
 
-static void potential_deadlock_detected(const std::pair<void*, void*>& mismatch, const LockStack& s1, const LockStack& s2)
-{
-    LogPrintf("POTENTIAL DEADLOCK DETECTED\n");
-    LogPrintf("Previous lock order was:\n");
-    BOOST_FOREACH(const PAIRTYPE(void*, CLockLocation)& i, s2)
-    {
-        if (i.first == mismatch.first) LogPrintf(" (1)");
-        if (i.first == mismatch.second) LogPrintf(" (2)");
-        LogPrintf(" %s\n", i.second.ToString().c_str());
-    }
-    LogPrintf("Current lock order is:\n");
-    BOOST_FOREACH(const PAIRTYPE(void*, CLockLocation)& i, s1)
-    {
-        if (i.first == mismatch.first) LogPrintf(" (1)");
-        if (i.first == mismatch.second) LogPrintf(" (2)");
-        LogPrintf(" %s\n", i.second.ToString().c_str());
-    }
+LockData& GetLockData() {
+    // This approach guarantees that the object is not destroyed until after its last use.
+    // The operating system automatically reclaims all the memory in a program's heap when that program exits.
+    // Since the ~LockData() destructor is never called, the LockData class and all
+    // its subclasses must have implicitly-defined destructors.
+    static LockData& lock_data = *new LockData();
+    return lock_data;
 }
 
-static void push_lock(void* c, const CLockLocation& locklocation, bool fTry)
+static void potential_deadlock_detected(const LockPair& mismatch, const LockStack& s1, const LockStack& s2)
 {
-    if (lockstack.get() == NULL)
-        lockstack.reset(new LockStack);
+    LogError("POTENTIAL DEADLOCK DETECTED");
+    LogError("Previous lock order was:");
+    for (const LockStackItem& i : s1) {
+        std::string prefix{};
+        if (i.first == mismatch.first) {
+            prefix = " (1)";
+        }
+        if (i.first == mismatch.second) {
+            prefix = " (2)";
+        }
+        LogError("%s %s", prefix, i.second.ToString());
+    }
 
-    if (fDebug) LogPrintf("Locking: %s\n", locklocation.ToString().c_str());
-    dd_mutex.lock();
+    std::string mutex_a, mutex_b;
+    LogError("Current lock order is:");
+    for (const LockStackItem& i : s2) {
+        std::string prefix{};
+        if (i.first == mismatch.first) {
+            prefix = " (1)";
+            mutex_a = i.second.Name();
+        }
+        if (i.first == mismatch.second) {
+            prefix = " (2)";
+            mutex_b = i.second.Name();
+        }
+        LogError("%s %s", prefix, i.second.ToString());
+    }
+    if (g_debug_lockorder_abort) {
+        tfm::format(std::cerr, "Assertion failed: detected inconsistent lock order for %s, details in debug log.\n", s2.back().second.ToString());
+        abort();
+    }
+    throw std::logic_error(strprintf("potential deadlock detected: %s -> %s -> %s", mutex_b, mutex_a, mutex_b));
+}
 
-    (*lockstack).push_back(std::make_pair(c, locklocation));
+static void double_lock_detected(const void* mutex, const LockStack& lock_stack)
+{
+    LogError("DOUBLE LOCK DETECTED");
+    LogError("Lock order:");
+    for (const LockStackItem& i : lock_stack) {
+        std::string prefix{};
+        if (i.first == mutex) {
+            prefix = " (*)";
+        }
+        LogError("%s %s", prefix, i.second.ToString());
+    }
+    if (g_debug_lockorder_abort) {
+        tfm::format(std::cerr,
+                    "Assertion failed: detected double lock for %s, details in debug log.\n",
+                    lock_stack.back().second.ToString());
+        abort();
+    }
+    throw std::logic_error("double lock detected");
+}
 
-    if (!fTry) {
-        BOOST_FOREACH(const PAIRTYPE(void*, CLockLocation)& i, (*lockstack)) {
-            if (i.first == c) break;
+template <typename MutexType>
+static void push_lock(MutexType* c, const CLockLocation& locklocation)
+{
+    constexpr bool is_recursive_mutex =
+        std::is_base_of_v<RecursiveMutex, MutexType> ||
+        std::is_base_of_v<std::recursive_mutex, MutexType>;
 
-            std::pair<void*, void*> p1 = std::make_pair(i.first, c);
-            if (lockorders.count(p1))
-                continue;
-            lockorders[p1] = (*lockstack);
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
 
-            std::pair<void*, void*> p2 = std::make_pair(c, i.first);
-            if (lockorders.count(p2))
-            {
-                potential_deadlock_detected(p1, lockorders[p2], lockorders[p1]);
+    LockStack& lock_stack = lockdata.m_lock_stacks[std::this_thread::get_id()];
+    lock_stack.emplace_back(c, locklocation);
+    for (size_t j = 0; j < lock_stack.size() - 1; ++j) {
+        const LockStackItem& i = lock_stack[j];
+        if (i.first == c) {
+            if (is_recursive_mutex) {
                 break;
             }
+            // It is not a recursive mutex and it appears in the stack two times:
+            // at position `j` and at the end (which we added just before this loop).
+            // Can't allow locking the same (non-recursive) mutex two times from the
+            // same thread as that results in an undefined behavior.
+            auto lock_stack_copy = lock_stack;
+            lock_stack.pop_back();
+            double_lock_detected(c, lock_stack_copy);
+            // double_lock_detected() does not return.
         }
+
+        const LockPair p1 = std::make_pair(i.first, c);
+        if (lockdata.lockorders.contains(p1))
+            continue;
+
+        const LockPair p2 = std::make_pair(c, i.first);
+        if (lockdata.lockorders.contains(p2)) {
+            auto lock_stack_copy = lock_stack;
+            lock_stack.pop_back();
+            potential_deadlock_detected(p1, lockdata.lockorders[p2], lock_stack_copy);
+            // potential_deadlock_detected() does not return.
+        }
+
+        lockdata.lockorders.emplace(p1, lock_stack);
+        lockdata.invlockorders.insert(p2);
     }
-    dd_mutex.unlock();
 }
 
 static void pop_lock()
 {
-    if (fDebug)
-    {
-        const CLockLocation& locklocation = (*lockstack).rbegin()->second;
-        LogPrintf("Unlocked: %s\n", locklocation.ToString().c_str());
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
+
+    LockStack& lock_stack = lockdata.m_lock_stacks[std::this_thread::get_id()];
+    lock_stack.pop_back();
+    if (lock_stack.empty()) {
+        lockdata.m_lock_stacks.erase(std::this_thread::get_id());
     }
-    dd_mutex.lock();
-    (*lockstack).pop_back();
-    dd_mutex.unlock();
 }
 
-void EnterCritical(const char* pszName, const char* pszFile, int nLine, void* cs, bool fTry)
+template <typename MutexType>
+void EnterCritical(const char* pszName, const char* pszFile, int nLine, MutexType* cs, bool fTry)
 {
-    push_lock(cs, CLockLocation(pszName, pszFile, nLine), fTry);
+    push_lock(cs, CLockLocation(pszName, pszFile, nLine, fTry, util::ThreadGetInternalName()));
+}
+template void EnterCritical(const char*, const char*, int, std::mutex*, bool);
+template void EnterCritical(const char*, const char*, int, std::recursive_mutex*, bool);
+
+void CheckLastCritical(void* cs, std::string& lockname, const char* guardname, const char* file, int line)
+{
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
+
+    const LockStack& lock_stack = lockdata.m_lock_stacks[std::this_thread::get_id()];
+    if (!lock_stack.empty()) {
+        const auto& lastlock = lock_stack.back();
+        if (lastlock.first == cs) {
+            lockname = lastlock.second.Name();
+            return;
+        }
+    }
+
+    LogError("INCONSISTENT LOCK ORDER DETECTED");
+    LogError("Current lock order (least recent first) is:");
+    for (const LockStackItem& i : lock_stack) {
+        LogError(" %s", i.second.ToString());
+    }
+    if (g_debug_lockorder_abort) {
+        tfm::format(std::cerr, "%s:%s %s was not most recent critical section locked, details in debug log.\n", file, line, guardname);
+        abort();
+    }
+    throw std::logic_error(strprintf("%s was not most recent critical section locked", guardname));
 }
 
 void LeaveCritical()
 {
     pop_lock();
 }
+
+static std::string LocksHeld()
+{
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
+
+    const LockStack& lock_stack = lockdata.m_lock_stacks[std::this_thread::get_id()];
+    std::string result;
+    for (const LockStackItem& i : lock_stack)
+        result += i.second.ToString() + std::string("\n");
+    return result;
+}
+
+static bool LockHeld(void* mutex)
+{
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
+
+    const LockStack& lock_stack = lockdata.m_lock_stacks[std::this_thread::get_id()];
+    for (const LockStackItem& i : lock_stack) {
+        if (i.first == mutex) return true;
+    }
+
+    return false;
+}
+
+template <typename MutexType>
+void AssertLockHeldInternal(const char* pszName, const char* pszFile, int nLine, MutexType* cs)
+{
+    if (LockHeld(cs)) return;
+    tfm::format(std::cerr, "Assertion failed: lock %s not held in %s:%i; locks held:\n%s", pszName, pszFile, nLine, LocksHeld());
+    abort();
+}
+template void AssertLockHeldInternal(const char*, const char*, int, Mutex*);
+template void AssertLockHeldInternal(const char*, const char*, int, RecursiveMutex*);
+
+template <typename MutexType>
+void AssertLockNotHeldInternal(const char* pszName, const char* pszFile, int nLine, MutexType* cs)
+{
+    if (!LockHeld(cs)) return;
+    tfm::format(std::cerr, "Assertion failed: lock %s held in %s:%i; locks held:\n%s", pszName, pszFile, nLine, LocksHeld());
+    abort();
+}
+template void AssertLockNotHeldInternal(const char*, const char*, int, Mutex*);
+template void AssertLockNotHeldInternal(const char*, const char*, int, RecursiveMutex*);
+
+void DeleteLock(void* cs)
+{
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
+    const LockPair item = std::make_pair(cs, nullptr);
+    LockOrders::iterator it = lockdata.lockorders.lower_bound(item);
+    while (it != lockdata.lockorders.end() && it->first.first == cs) {
+        const LockPair invitem = std::make_pair(it->first.second, it->first.first);
+        lockdata.invlockorders.erase(invitem);
+        lockdata.lockorders.erase(it++);
+    }
+    InvLockOrders::iterator invit = lockdata.invlockorders.lower_bound(item);
+    while (invit != lockdata.invlockorders.end() && invit->first == cs) {
+        const LockPair invinvitem = std::make_pair(invit->second, invit->first);
+        lockdata.lockorders.erase(invinvitem);
+        lockdata.invlockorders.erase(invit++);
+    }
+}
+
+bool LockStackEmpty()
+{
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
+    const auto it = lockdata.m_lock_stacks.find(std::this_thread::get_id());
+    if (it == lockdata.m_lock_stacks.end()) {
+        return true;
+    }
+    return it->second.empty();
+}
+
+bool g_debug_lockorder_abort = true;
 
 #endif /* DEBUG_LOCKORDER */
